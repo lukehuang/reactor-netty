@@ -30,7 +30,9 @@ import io.netty.handler.codec.http.HttpStatusClass;
 import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.util.ReferenceCountUtil;
 import reactor.core.Exceptions;
-import reactor.ipc.netty.ConnectionEvents;
+import reactor.ipc.netty.Connection;
+import reactor.ipc.netty.ConnectionObserver;
+import reactor.ipc.netty.channel.ChannelOperations;
 import reactor.util.concurrent.Queues;
 
 import static io.netty.handler.codec.http.HttpUtil.*;
@@ -44,7 +46,8 @@ final class HttpServerHandler extends ChannelDuplexHandler
 
 	static final String MULTIPART_PREFIX = "multipart";
 
-	final ConnectionEvents listener;
+	final ChannelOperations.OnSetup opsFactory;
+	final ConnectionObserver listener;
 
 	boolean persistentConnection = true;
 	// Track pending responses to support client pipelining: https://tools.ietf.org/html/rfc7230#section-6.3.2
@@ -57,7 +60,8 @@ final class HttpServerHandler extends ChannelDuplexHandler
 	boolean overflow;
 	boolean mustRecycleEncoder;
 
-	HttpServerHandler(ConnectionEvents listener) {
+	HttpServerHandler(ChannelOperations.OnSetup opsFactory, ConnectionObserver listener) {
+		this.opsFactory = opsFactory;
 		this.listener = listener;
 	}
 
@@ -72,7 +76,7 @@ final class HttpServerHandler extends ChannelDuplexHandler
 	}
 
 	@Override
-	public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+	public void channelRead(ChannelHandlerContext ctx, Object msg) {
 		// read message and track if it was keepAlive
 		if (msg instanceof HttpRequest) {
 			final HttpRequest request = (HttpRequest) msg;
@@ -105,7 +109,7 @@ final class HttpServerHandler extends ChannelDuplexHandler
 			}
 			else {
 				overflow = false;
-				listener.onSetup(ctx.channel(), msg);
+				opsFactory.create(Connection.from(ctx.channel()), listener, msg);
 
 				if (!(msg instanceof FullHttpRequest)) {
 					return;
@@ -150,8 +154,7 @@ final class HttpServerHandler extends ChannelDuplexHandler
 	}
 
 	@Override
-	public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise)
-			throws Exception {
+	public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
 		// modify message on way out to add headers if needed
 		if (msg instanceof HttpResponse) {
 			final HttpResponse response = (HttpResponse) msg;
@@ -226,7 +229,7 @@ final class HttpServerHandler extends ChannelDuplexHandler
 					return;
 				}
 				nextRequest = true;
-				listener.onSetup(ctx.channel(), next);
+				opsFactory.create(Connection.from(ctx.channel()), listener, next);
 
 				if (!(next instanceof FullHttpRequest)) {
 					pipelined.poll();
@@ -239,7 +242,7 @@ final class HttpServerHandler extends ChannelDuplexHandler
 	}
 
 	@Override
-	public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+	public void handlerRemoved(ChannelHandlerContext ctx) {
 		discard();
 	}
 

@@ -25,7 +25,6 @@ import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import java.util.function.BiPredicate;
-
 import javax.annotation.Nullable;
 
 import io.netty.buffer.ByteBuf;
@@ -49,7 +48,8 @@ import org.reactivestreams.Subscription;
 import reactor.core.CoreSubscriber;
 import reactor.core.Exceptions;
 import reactor.core.publisher.Operators;
-import reactor.ipc.netty.ConnectionEvents;
+import reactor.ipc.netty.Connection;
+import reactor.ipc.netty.ConnectionObserver;
 import reactor.ipc.netty.NettyOutbound;
 import reactor.ipc.netty.NettyPipeline;
 import reactor.util.Logger;
@@ -65,9 +65,10 @@ import reactor.util.concurrent.Queues;
 final class ChannelOperationsHandler extends ChannelDuplexHandler
 		implements NettyPipeline.SendOptions, ChannelFutureListener {
 
-	final PublisherSender                inner;
-	final int                            prefetch;
-	final ConnectionEvents listener;
+	final PublisherSender    inner;
+	final int                prefetch;
+	final ConnectionObserver listener;
+	final ChannelOperations.OnSetup opsFactory;
 
 	/**
 	 * Cast the supplied queue (SpscLinkedArrayQueue) to use its atomic dual-insert
@@ -89,15 +90,18 @@ final class ChannelOperationsHandler extends ChannelDuplexHandler
 	volatile long    scheduledFlush;
 
 	@SuppressWarnings("unchecked")
-	ChannelOperationsHandler(ConnectionEvents listener) {
+	ChannelOperationsHandler(ChannelOperations.OnSetup opsFactory, ConnectionObserver listener) {
 		this.inner = new PublisherSender(this);
 		this.prefetch = 32;
 		this.listener = listener;
+		this.opsFactory = opsFactory;
 	}
 
 	@Override
-	public void channelActive(ChannelHandlerContext ctx) throws Exception {
-		listener.onSetup(ctx.channel(), null);
+	public void channelActive(ChannelHandlerContext ctx) {
+		Connection c = Connection.from(ctx.channel());
+		listener.onStateChange(c, ConnectionObserver.State.CONNECTED);
+		opsFactory.create(c, listener, null);
 	}
 
 	@Override
@@ -152,7 +156,7 @@ final class ChannelOperationsHandler extends ChannelDuplexHandler
 	}
 
 	@Override
-	public void channelWritabilityChanged(ChannelHandlerContext ctx) throws Exception {
+	public void channelWritabilityChanged(ChannelHandlerContext ctx) {
 		if (log.isDebugEnabled()) {
 			log.debug("{} Write state change {}",
 					ctx.channel(),
@@ -163,33 +167,31 @@ final class ChannelOperationsHandler extends ChannelDuplexHandler
 	}
 
 	@Override
-	final public void exceptionCaught(ChannelHandlerContext ctx, Throwable err)
-			throws Exception {
+	final public void exceptionCaught(ChannelHandlerContext ctx, Throwable err) {
 		Exceptions.throwIfJvmFatal(err);
 		ChannelOperations<?, ?> ops = ChannelOperations.get(ctx.channel());
 		if (ops != null) {
 			ops.onInboundError(err);
 		}
 		else {
-			listener.onReceiveError(ctx.channel(), err);
-			listener.onDispose(ctx.channel());
+			listener.onUncaughtException(Connection.from(ctx.channel()), err);
 		}
 	}
 
 	@Override
-	public void flush(ChannelHandlerContext ctx) throws Exception {
+	public void flush(ChannelHandlerContext ctx) {
 		drain();
 	}
 
 	@Override
-	public void handlerAdded(ChannelHandlerContext ctx) throws Exception {
+	public void handlerAdded(ChannelHandlerContext ctx) {
 		this.ctx = ctx;
 		this.unsafe = ctx.channel().unsafe();
 		inner.request(prefetch);
 	}
 
 	@Override
-	public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+	public void handlerRemoved(ChannelHandlerContext ctx) {
 		if (!removed) {
 			removed = true;
 
@@ -199,17 +201,9 @@ final class ChannelOperationsHandler extends ChannelDuplexHandler
 	}
 
 	@Override
-	final public void userEventTriggered(ChannelHandlerContext ctx, Object evt)
-			throws Exception {
+	final public void userEventTriggered(ChannelHandlerContext ctx, Object evt) {
 		if (log.isTraceEnabled()) {
 			log.trace("{} End of the pipeline, User event {}", ctx.channel(), evt);
-		}
-		if (evt == NettyPipeline.handlerTerminatedEvent()) {
-			if (log.isDebugEnabled()){
-				log.debug("{} Disposing channel", ctx.channel());
-			}
-			listener.onDispose(ctx.channel());
-			return;
 		}
 		if (evt instanceof NettyPipeline.SendOptionsChangeEvent) {
 			if (log.isDebugEnabled()) {
@@ -225,8 +219,7 @@ final class ChannelOperationsHandler extends ChannelDuplexHandler
 
 	@Override
 	@SuppressWarnings("unchecked")
-	public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise)
-			throws Exception {
+	public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
 		if (log.isDebugEnabled()) {
 			log.debug("{} Writing object {}", ctx.channel(), msg);
 		}
@@ -256,7 +249,7 @@ final class ChannelOperationsHandler extends ChannelDuplexHandler
 	}
 
 	@Override
-	public void operationComplete(ChannelFuture future) throws Exception {
+	public void operationComplete(ChannelFuture future) {
 		if (future.isSuccess() && innerActive) {
 			inner.request(1L);
 		}
@@ -660,7 +653,7 @@ final class ChannelOperationsHandler extends ChannelDuplexHandler
 		}
 
 		@Override
-		public void operationComplete(ChannelFuture future) throws Exception {
+		public void operationComplete(ChannelFuture future) {
 			if (future.isSuccess()) {
 				promise.setSuccess();
 			}

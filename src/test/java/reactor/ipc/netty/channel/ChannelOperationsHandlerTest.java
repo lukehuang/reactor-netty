@@ -29,7 +29,6 @@ import java.util.concurrent.TimeUnit;
 
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.http.HttpMethod;
-import org.junit.Ignore;
 import org.junit.Test;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -37,7 +36,6 @@ import reactor.core.scheduler.Schedulers;
 import reactor.ipc.netty.ByteBufFlux;
 import reactor.ipc.netty.DisposableServer;
 import reactor.ipc.netty.FutureMono;
-import reactor.ipc.netty.Connection;
 import reactor.ipc.netty.SocketUtils;
 import reactor.ipc.netty.http.client.HttpClient;
 import reactor.ipc.netty.http.server.HttpServer;
@@ -103,7 +101,7 @@ public class ChannelOperationsHandlerTest {
 	}
 
 	private void doTestPrefetchSize(int writeBufferLowWaterMark, int writeBufferHighWaterMark) {
-		ChannelOperationsHandler handler = new ChannelOperationsHandler(null);
+		ChannelOperationsHandler handler = new ChannelOperationsHandler(null, null);
 
 		EmbeddedChannel channel = new EmbeddedChannel(handler);
 		channel.config().setWriteBufferLowWaterMark(writeBufferLowWaterMark)

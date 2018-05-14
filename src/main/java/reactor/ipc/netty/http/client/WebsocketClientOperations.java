@@ -151,7 +151,6 @@ final class WebsocketClientOperations extends HttpClientOperations
 						return;
 					}
 				}
-				httpClientEvents.onNext(HttpClientEvent.onResponse);
 			}
 			return;
 		}

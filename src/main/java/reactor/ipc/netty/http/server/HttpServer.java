@@ -24,11 +24,11 @@ import java.util.function.Function;
 import javax.annotation.Nullable;
 
 import io.netty.bootstrap.ServerBootstrap;
+import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.logging.LoggingHandler;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Mono;
 import reactor.ipc.netty.Connection;
-import reactor.ipc.netty.ConnectionEvents;
 import reactor.ipc.netty.DisposableServer;
 import reactor.ipc.netty.channel.BootstrapHandlers;
 import reactor.ipc.netty.channel.ChannelOperations;
@@ -303,33 +303,11 @@ public abstract class HttpServer {
 		return DEFAULT_TCP_SERVER;
 	}
 
+	static final ChannelOperations.OnSetup HTTP_OPS =
+			(c, listener, msg) -> new HttpServerOperations(c, listener, (HttpRequest) msg, false).bind();
 
-
-	static final ChannelOperations.OnSetup HTTP_OPS = new ChannelOperations.OnSetup() {
-		@Nullable
-		@Override
-		public ChannelOperations<?, ?> create(Connection c, ConnectionEvents listener, Object msg) {
-			return HttpServerOperations.bindHttp(c, listener, msg, false);
-		}
-
-		@Override
-		public boolean createOnConnected() {
-			return false;
-		}
-	};
-
-	static final ChannelOperations.OnSetup HTTP_OPS_FORWARDED = new ChannelOperations.OnSetup() {
-		@Nullable
-		@Override
-		public ChannelOperations<?, ?> create(Connection c, ConnectionEvents listener, Object msg) {
-			return HttpServerOperations.bindHttp(c, listener, msg, true);
-		}
-
-		@Override
-		public boolean createOnConnected() {
-			return false;
-		}
-	};
+	static final ChannelOperations.OnSetup HTTP_OPS_FORWARDED =
+			(c, listener, msg) -> new HttpServerOperations(c, listener, (HttpRequest) msg, true).bind();
 
 	static final int DEFAULT_PORT =
 			System.getenv("PORT") != null ? Integer.parseInt(System.getenv("PORT")) : 8080;
