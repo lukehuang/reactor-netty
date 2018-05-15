@@ -72,13 +72,11 @@ import reactor.core.publisher.FluxSink;
 import reactor.core.publisher.Mono;
 import reactor.ipc.netty.ByteBufFlux;
 import reactor.ipc.netty.Connection;
-import reactor.ipc.netty.DisposableChannel;
 import reactor.ipc.netty.DisposableServer;
 import reactor.ipc.netty.FutureMono;
 import reactor.ipc.netty.NettyOutbound;
 import reactor.ipc.netty.http.HttpResources;
 import reactor.ipc.netty.http.client.HttpClient;
-import reactor.ipc.netty.http.client.HttpClientResponse;
 import reactor.ipc.netty.resources.PoolResources;
 import reactor.ipc.netty.tcp.TcpClient;
 import reactor.test.StepVerifier;
@@ -139,8 +137,10 @@ public class HttpServerTests {
 		                              .wiretap()
 		                              .post()
 		                              .uri("/return")
-		                              .send((r, out) -> r.keepAlive(false)
-		                                                 .send(src))
+		                              .send((r, out) -> {
+			                              r.keepAlive(false);
+			                              return out.send(src);
+		                              })
 		                              .responseSingle((res, buf) -> Mono.just(res.status().code())))
 		    .collectList()
 		    .block();
@@ -521,7 +521,7 @@ public class HttpServerTests {
 	@Ignore
 	public void keepAlive() throws URISyntaxException {
 		Path resource = Paths.get(getClass().getResource("/public").toURI());
-		DisposableServer c = HttpServer.create()
+		DisposableServer s = HttpServer.create()
 		                         .port(0)
 		                         .router(routes -> routes.directory("/test", resource))
 		                         .wiretap()
@@ -530,52 +530,52 @@ public class HttpServerTests {
 		HttpResources.set(PoolResources.fixed("http", 1));
 
 		Channel response0 = HttpClient.prepare()
-		                              .port(c.address().getPort())
+		                              .port(s.address().getPort())
 		                              .wiretap()
 		                              .get()
 		                              .uri("/test/index.html")
-		                              .responseSingle((res, buf) -> Mono.just(res.channel()).delayUntil(r -> res.receive()))
-		                              .block(Duration.ofSeconds(30));
+		                              .responseConnection((res, c) -> Mono.just(c.channel()).delayUntil(ch -> c.inbound().receive()))
+		                              .blockLast(Duration.ofSeconds(30));
 
 		Channel response1 = HttpClient.prepare()
-		                              .port(c.address().getPort())
+		                              .port(s.address().getPort())
 		                              .wiretap()
 		                              .get()
 		                              .uri("/test/test.css")
-		                              .responseSingle((res, buf) -> Mono.just(res.channel()).delayUntil(r -> res.receive()))
-		                              .block(Duration.ofSeconds(30));
+		                              .responseConnection((res, c) -> Mono.just(c.channel()).delayUntil(ch -> c.inbound().receive()))
+		                              .blockLast(Duration.ofSeconds(30));
 
 		Channel response2 = HttpClient.prepare()
-		                              .port(c.address().getPort())
+		                              .port(s.address().getPort())
 		                              .wiretap()
 		                              .get()
 		                              .uri("/test/test1.css")
-		                              .responseSingle((res, buf) -> Mono.just(res.channel()).delayUntil(r -> res.receive()))
-		                              .block(Duration.ofSeconds(30));
+		                              .responseConnection((res, c) -> Mono.just(c.channel()).delayUntil(ch -> c.inbound().receive()))
+		                              .blockLast(Duration.ofSeconds(30));
 
 		Channel response3 = HttpClient.prepare()
-		                              .port(c.address().getPort())
+		                              .port(s.address().getPort())
 		                              .wiretap()
 		                              .get()
 		                              .uri("/test/test2.css")
-		                              .responseSingle((res, buf) -> Mono.just(res.channel()).delayUntil(r -> res.receive()))
-		                              .block(Duration.ofSeconds(30));
+		                              .responseConnection((res, c) -> Mono.just(c.channel()).delayUntil(ch -> c.inbound().receive()))
+		                              .blockLast(Duration.ofSeconds(30));
 
 		Channel response4 = HttpClient.prepare()
-		                              .port(c.address().getPort())
+		                              .port(s.address().getPort())
 		                              .wiretap()
 		                              .get()
 		                              .uri("/test/test3.css")
-		                              .responseSingle((res, buf) -> Mono.just(res.channel()).delayUntil(r -> res.receive()))
-		                              .block(Duration.ofSeconds(30));
+		                              .responseConnection((res, c) -> Mono.just(c.channel()).delayUntil(ch -> c.inbound().receive()))
+		                              .blockLast(Duration.ofSeconds(30));
 
 		Channel response5 = HttpClient.prepare()
-		                              .port(c.address().getPort())
+		                              .port(s.address().getPort())
 		                              .wiretap()
 		                              .get()
 		                              .uri("/test/test4.css")
-		                              .responseSingle((res, buf) -> Mono.just(res.channel()).delayUntil(r -> res.receive()))
-		                              .block(Duration.ofSeconds(30));
+		                              .responseConnection((res, c) -> Mono.just(c.channel()).delayUntil(ch -> c.inbound().receive()))
+		                              .blockLast(Duration.ofSeconds(30));
 
 		Assert.assertEquals(response0, response1);
 		Assert.assertEquals(response0, response2);
@@ -584,7 +584,7 @@ public class HttpServerTests {
 		Assert.assertEquals(response0, response5);
 
 		HttpResources.reset();
-		c.dispose();
+		s.dispose();
 	}
 
 	@Test
@@ -825,7 +825,7 @@ public class HttpServerTests {
 
 	@Test
 	public void testIssue186() {
-		DisposableChannel server =
+		DisposableServer server =
 				HttpServer.create()
 				          .port(0)
 				          .handler((req, res) -> res.status(200).send())
@@ -877,24 +877,22 @@ public class HttpServerTests {
 				          .handler((req, res) -> res.sendString(content))
 				          .bindNow();
 
-		HttpClientResponse r =
+		AtomicReference<Channel> ch = new AtomicReference<>();
+		Flux<ByteBuf> r =
 				HttpClient.prepare()
+				          .doOnResponse((res, c) -> ch.set(c.channel()))
 						  .port(server.address().getPort())
 				          .get()
 				          .uri("/")
-				          .response()
-				          .block(Duration.ofSeconds(30));
+				          .responseContent();
 
-		ByteBufFlux response = r.receive();
-
-		StepVerifier.create(response)
+		StepVerifier.create(r)
 		            .expectNextCount(2)
 		            .expectError(IOException.class)
 		            .verify(Duration.ofSeconds(30));
 
-		FutureMono.from(r.channel().closeFuture()).block(Duration.ofSeconds(30));
+		FutureMono.from(ch.get().closeFuture()).block(Duration.ofSeconds(30));
 
-		r.dispose();
 		server.dispose();
 	}
 

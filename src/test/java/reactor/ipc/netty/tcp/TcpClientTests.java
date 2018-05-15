@@ -50,9 +50,7 @@ import reactor.ipc.netty.http.client.HttpClient;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.is;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
 /**
  * @author Stephane Maldini
@@ -206,7 +204,7 @@ public class TcpClientTests {
 	}
 
 	@Test
-	public void closingPromiseIsFulfilled() throws InterruptedException {
+	public void closingPromiseIsFulfilled() {
 		TcpClient client =
 				TcpClient.newConnection()
 				         .host("localhost")
@@ -262,7 +260,7 @@ public class TcpClientTests {
 	/*Check in details*/
 	@Test
 	public void connectionWillAttemptToReconnectWhenItIsDropped()
-			throws InterruptedException, IOException {
+			throws InterruptedException {
 		final CountDownLatch connectionLatch = new CountDownLatch(1);
 		final CountDownLatch reconnectionLatch = new CountDownLatch(1);
 
@@ -298,7 +296,7 @@ public class TcpClientTests {
 	@Test
 	@Ignore
 	public void consumerSpecAssignsEventHandlers()
-			throws InterruptedException, IOException {
+			throws InterruptedException {
 		final CountDownLatch latch = new CountDownLatch(2);
 		final CountDownLatch close = new CountDownLatch(1);
 		final AtomicLong totalDelay = new AtomicLong();
@@ -310,15 +308,12 @@ public class TcpClientTests {
 				         .port(timeoutServerPort);
 
 		Connection s = client.handler((in, out) -> {
-			in.onReadIdle(500, () -> {
-				  totalDelay.addAndGet(System.currentTimeMillis() - start);
-				  latch.countDown();
-			}).withConnection(c -> c.onDispose(close::countDown));
+			in.withConnection(c -> c.onDispose(close::countDown));
 
-			out.onWriteIdle(500, () -> {
+			out.withConnection(c -> c.onWriteIdle(500, () -> {
 				totalDelay.addAndGet(System.currentTimeMillis() - start);
 				latch.countDown();
-			});
+			}));
 
 			return Mono.delay(Duration.ofSeconds(3))
 			           .then()
@@ -344,7 +339,7 @@ public class TcpClientTests {
 		                            .port(heartbeatServerPort);
 
 		Connection s = client.handler((in, out) -> {
-			in.onReadIdle(500, latch::countDown);
+			in.withConnection(c -> c.onReadIdle(500, latch::countDown));
 			return Flux.never();
 		})
 		                     .wiretap()
@@ -361,7 +356,7 @@ public class TcpClientTests {
 
 	@Test
 	public void writeIdleDoesNotFireWhileDataIsBeingSent()
-			throws InterruptedException, IOException {
+			throws InterruptedException {
 		final CountDownLatch latch = new CountDownLatch(1);
 		long start = System.currentTimeMillis();
 
@@ -370,7 +365,7 @@ public class TcpClientTests {
 		                             .port(echoServerPort)
 		                             .handler((in, out) -> {
 			                               System.out.println("hello");
-			                               out.onWriteIdle(500, latch::countDown);
+			                               out.withConnection(c -> c.onWriteIdle(500, latch::countDown));
 
 			                               List<Publisher<Void>> allWrites =
 					                               new ArrayList<>();

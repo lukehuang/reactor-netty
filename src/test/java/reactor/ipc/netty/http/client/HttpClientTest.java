@@ -152,14 +152,14 @@ public class HttpClientTest {
 				          .addressSupplier(() -> new InetSocketAddress(8080))
 				          .wiretap();
 		Flux.just("1", "2", "3")
-		    .concatMap(data -> client.post()
+		    .concatMap(data -> client.doOnResponse((res, conn) -> localAddresses.add(conn.channel()
+		                                                                                 .localAddress()
+		                                                                                 .toString()))
+				                     .post()
 		                             .uri("/")
 		                             .send(ByteBufFlux.fromString(Flux.just(data)))
 		                             .response((res, buf) -> {
 		                                       buf.subscribe();
-		                                       localAddresses.add(res.channel()
-		                                                             .localAddress()
-		                                                             .toString());
 		                                       return Mono.empty();
 		                             }));
 
@@ -398,7 +398,6 @@ public class HttpClientTest {
 
 	private void doSimpleTest404(HttpClient client) {
 		int res = client.followRedirect()
-		                .doAfterResponse(c -> System.out.println("LOLOL"))
 				        .get()
 				        .uri("/unsupportedURI")
 				        .responseSingle((r, buf) -> Mono.just(r.status().code()))
@@ -433,9 +432,9 @@ public class HttpClientTest {
 				          .tcpConfiguration(tcpClient -> tcpClient.host("google.com"))
 				          .wiretap()
 				          .noChunkedTransfer()
-				          .request(HttpMethod.GET)
+				          .doOnRequest((req, c) -> req.keepAlive(false))
+				          .get()
 				          .uri("/unsupportedURI")
-				          .send((c, out) -> c.keepAlive(false))
 				          .responseSingle((res, buf) -> Mono.just(res.status()))
 				          .block(Duration.ofSeconds(30));
 
@@ -451,24 +450,20 @@ public class HttpClientTest {
 
 		HttpResponseStatus r =
 				HttpClient.prepare(p)
+				          .doOnResponse((res, c) -> ch1.set(c.channel()))
 				          .wiretap()
 				          .get()
 				          .uri("http://google.com/unsupportedURI")
-				          .responseSingle((res, buf) -> {
-				              res.withConnection(c -> ch1.set(c.channel()));
-				              return Mono.just(res.status());
-				          })
+				          .responseSingle((res, buf) -> Mono.just(res.status()))
 				          .block(Duration.ofSeconds(30));
 
 		HttpResponseStatus r2 =
 				HttpClient.prepare(p)
+				          .doOnResponse((res, c) -> ch2.set(c.channel()))
 				          .wiretap()
 				          .get()
 				          .uri("http://google.com/unsupportedURI")
-				          .responseSingle((res, buf) -> {
-				              res.withConnection(c -> ch2.set(c.channel()));
-				              return Mono.just(res.status());
-				          })
+				          .responseSingle((res, buf) -> Mono.just(res.status()))
 				          .block(Duration.ofSeconds(30));
 
 		AtomicBoolean same = new AtomicBoolean();
@@ -592,7 +587,6 @@ public class HttpClientTest {
 		                                           .zipWith(Mono.just(r.responseHeaders().get("Content-Encoding", "")))
 		                                           .zipWith(Mono.just(r))))
 		            .expectNextMatches(tuple -> {
-		                               tuple.getT2().dispose();
 		                               String content = tuple.getT1().getT1();
 		                               return !content.contains("<html>") && !content.contains("<head>")
 		                                      && "gzip".equals(tuple.getT1().getT2());
@@ -605,24 +599,20 @@ public class HttpClientTest {
 				HttpClient.prepare()
 				          .wiretap()
 				          .followRedirect()
-				          .request(HttpMethod.GET)
+				          .doOnRequest((req, c) -> {
+				          	req.addHeader("Accept-Encoding", "gzip")
+				               .addHeader("Accept-Encoding", "deflate");
+				          	c.addHandlerFirst("gzipDecompressor", new HttpContentDecompressor());
+				          })
+				          .get()
 				          .uri("http://www.httpwatch.com")
-				          .send((req, out) ->
-					          req.withConnection(c -> c.addHandlerFirst
-							          ("gzipDecompressor", new
-							          HttpContentDecompressor()))
-					             .addHeader
-							          ("Accept-Encoding", "gzip")
-					                    .addHeader("Accept-Encoding", "deflate")
-				          )
 				          .response((r, buf) -> buf.asString()
 				                                   .elementAt(0)
 				                                   .map(s -> s.substring(0, Math.min(s.length() -1, 100)))
 				                                   .zipWith(Mono.just(r.responseHeaders().get("Content-Encoding", "")))
 				                                   .zipWith(Mono.just(r))))
 		            .expectNextMatches(tuple -> {
-		                               tuple.getT2().dispose();
-		                               String content = tuple.getT1().getT1();
+			            String content = tuple.getT1().getT1();
 		                               return content.contains("<html>") && content.contains("<head>")
 		                                      && "".equals(tuple.getT1().getT2());
 		                               })
@@ -660,10 +650,7 @@ public class HttpClientTest {
 		                  .response((r, buf) -> buf.asString()
 		                                           .elementAt(0)
 		                                           .zipWith(Mono.just(r))))
-		            .expectNextMatches(tuple -> {
-		                tuple.getT2().dispose();
-		                return expectedResponse.equals(tuple.getT1());
-		            })
+		            .expectNextMatches(tuple -> expectedResponse.equals(tuple.getT1()))
 		            .expectComplete()
 		            .verify(Duration.ofSeconds(30));
 
@@ -800,7 +787,7 @@ public class HttpClientTest {
 				          .wiretap()
 				          .post()
 				          .uri("/upload")
-				          .send((r, out) -> r.sendFile(largeFile))
+				          .send((r, out) -> out.sendFile(largeFile))
 				          .responseSingle((res, buf) -> buf.asString()
 				                                           .zipWith(Mono.just(res.status().code())))
 				          .block(Duration.ofSeconds(120));
@@ -839,7 +826,7 @@ public class HttpClientTest {
 				createHttpClientForContext(context)
 				          .post()
 				          .uri("/upload")
-				          .send((r, out) -> r.sendFile(largeFile))
+				          .send((r, out) -> out.sendFile(largeFile))
 				          .responseSingle((res, buf) -> buf.asString()
 				                                           .zipWith(Mono.just(res.status().code())))
 				          .block(Duration.ofSeconds(120));
@@ -872,10 +859,10 @@ public class HttpClientTest {
 
 		ByteBuf response1 =
 				createHttpClientForContext(context)
-						.doOnRequest(r -> System.out.println("onReq: "+r))
-						.doAfterRequest(r -> System.out.println("afterReq: "+r))
-						.doOnResponse(r -> System.out.println("onResp: "+r))
-						.doAfterResponse(r -> System.out.println("afterResp: "+r))
+						.doOnRequest((r, c) -> System.out.println("onReq: "+r))
+						.doAfterRequest((r, c) -> System.out.println("afterReq: "+r))
+						.doOnResponse((r, c) -> System.out.println("onResp: "+r))
+						.doAfterResponse((r, c) -> System.out.println("afterResp: "+r))
 				          .put()
 				          .uri("/201")
 				          .responseContent()

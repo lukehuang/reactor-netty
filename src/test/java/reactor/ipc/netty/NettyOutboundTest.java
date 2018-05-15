@@ -30,7 +30,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import javax.net.ssl.SSLException;
@@ -58,53 +57,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class NettyOutboundTest {
 
 	@Test
-	public void onWriteIdleReplaces() throws Exception {
-		EmbeddedChannel channel = new EmbeddedChannel();
-		Connection mockContext = () -> channel;
-		NettyOutbound outbound = new NettyOutbound() {
-
-			@Override
-			public NettyOutbound sendObject(Object message) {
-				return this;
-			}
-
-			@Override
-			public ByteBufAllocator alloc() {
-				return ByteBufAllocator.DEFAULT;
-			}
-
-			@Override
-			public <S> NettyOutbound sendUsing(Callable<? extends S> sourceInput,
-					BiFunction<? super Connection, ? super S, ?> mappedInput,
-					Consumer<? super S> sourceCleanup) {
-				return this;
-			}
-
-			@Override
-			public NettyOutbound withConnection(Consumer<? super Connection> withConnection) {
-				withConnection.accept(mockContext);
-				return this;
-			}
-		};
-
-		AtomicLong idle1 = new AtomicLong();
-		AtomicLong idle2 = new AtomicLong();
-
-		outbound.onWriteIdle(100, idle1::incrementAndGet);
-		outbound.onWriteIdle(150, idle2::incrementAndGet);
-		ReactorNetty.OutboundIdleStateHandler idleStateHandler =
-				(ReactorNetty.OutboundIdleStateHandler) channel.pipeline().get(NettyPipeline.OnChannelWriteIdle);
-		idleStateHandler.onWriteIdle.run();
-
-		assertThat(channel.pipeline().names()).containsExactly(
-				NettyPipeline.OnChannelWriteIdle,
-				"DefaultChannelPipeline$TailContext#0");
-
-		assertThat(idle1.intValue()).isZero();
-		assertThat(idle2.intValue()).isEqualTo(1);
-	}
-
-	@Test
 	public void sendFileWithoutTlsUsesFileRegion() throws URISyntaxException {
 		List<Class<?>> messageClasses = new ArrayList<>(2);
 
@@ -124,7 +76,7 @@ public class NettyOutboundTest {
 				new MessageToMessageEncoder<Object>() {
 					@Override
 					protected void encode(ChannelHandlerContext ctx, Object msg,
-							List<Object> out) throws Exception {
+							List<Object> out) {
 						messageClasses.add(msg.getClass());
 						ReferenceCountUtil.retain(msg);
 						out.add(msg);
@@ -193,7 +145,7 @@ public class NettyOutboundTest {
 				new MessageToMessageEncoder<ByteBuf>() {
 					@Override
 					protected void encode(ChannelHandlerContext ctx, ByteBuf msg,
-							List<Object> out) throws Exception {
+							List<Object> out) {
 						clearMessages.add(msg.toString(CharsetUtil.UTF_8));
 						out.add(msg.retain()); //the encoder will release the buffer, make sure it is retained for SslHandler
 					}
@@ -203,8 +155,7 @@ public class NettyOutboundTest {
 				//helps to ensure a ChunkedFile was written outs
 				new MessageToMessageEncoder<Object>() {
 					@Override
-					protected void encode(ChannelHandlerContext ctx, Object msg, List<Object> out)
-							throws Exception {
+					protected void encode(ChannelHandlerContext ctx, Object msg, List<Object> out) {
 						messageWritten.add(msg.getClass());
 						//passing the ChunkedFile through this method releases it, which is undesired
 						ReferenceCountUtil.retain(msg);
@@ -277,7 +228,7 @@ public class NettyOutboundTest {
 				new MessageToMessageEncoder<ByteBuf>() {
 					@Override
 					protected void encode(ChannelHandlerContext ctx, ByteBuf msg,
-							List<Object> out) throws Exception {
+							List<Object> out) {
 						out.add(msg.toString(CharsetUtil.UTF_8));
 					}
 				},
@@ -286,8 +237,7 @@ public class NettyOutboundTest {
 				//helps to ensure a ChunkedFile was written outs
 				new MessageToMessageEncoder<Object>() {
 					@Override
-					protected void encode(ChannelHandlerContext ctx, Object msg, List<Object> out)
-							throws Exception {
+					protected void encode(ChannelHandlerContext ctx, Object msg, List<Object> out) {
 						messageWritten.add(msg.getClass());
 						out.add(msg);
 					}
